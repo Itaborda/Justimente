@@ -1,4 +1,3 @@
-
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
@@ -20,9 +19,11 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 }
 
 app.use(helmet())
+
 app.use(cors({
   origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173'
 }))
+
 app.use(express.json({ limit: '20kb' }))
 
 app.use('/api/auth', rateLimit({
@@ -100,14 +101,20 @@ const auth = (req: any, res: Response, next: express.NextFunction) => {
   const raw = req.headers.authorization?.replace(/^Bearer\s+/i, '')
 
   if (!raw) {
-    return res.status(401).json({ message: 'Debes iniciar sesión.' })
+    return res.status(401).json({
+      message: 'Debes iniciar sesión.'
+    })
   }
 
   try {
-    req.claims = jwt.verify(raw, JWT_SECRET, { issuer: 'justimente' })
+    req.claims = jwt.verify(raw, JWT_SECRET, {
+      issuer: 'justimente'
+    })
     next()
   } catch {
-    return res.status(401).json({ message: 'Sesión inválida o vencida.' })
+    return res.status(401).json({
+      message: 'Sesión inválida o vencida.'
+    })
   }
 }
 
@@ -118,6 +125,7 @@ const publicUser = (u: User) => ({
   role: u.role
 })
 
+// Comprobar funcionamiento de la API
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
@@ -125,16 +133,34 @@ app.get('/api/health', (_req: Request, res: Response) => {
   })
 })
 
+// REGISTRO
 app.post('/api/auth/register', asyncHandler(async (req: Request, res: Response) => {
   const schema = z.object({
-    name: z.string().trim().min(2).max(100),
-    email: z.string().email().max(180),
-    password: z.string().min(8).max(72),
-    role: z.enum(['citizen', 'lawyer', 'psychologist']).default('citizen')
+    name: z.string()
+      .trim()
+      .min(2, 'El nombre debe tener al menos 2 caracteres')
+      .max(100),
+
+    email: z.string()
+      .trim()
+      .email('Escribe un correo electrónico válido')
+      .max(180)
+      .transform(value => value.toLowerCase()),
+
+    password: z.string()
+      .min(8, 'La contraseña debe tener mínimo 8 caracteres')
+      .max(72),
+
+    role: z.enum([
+      'citizen',
+      'lawyer',
+      'psychologist'
+    ]).default('citizen')
   })
 
   const data = schema.parse(req.body)
-  const email = data.email.toLowerCase()
+
+  const email = data.email
 
   if (users.some(u => u.email === email)) {
     return res.status(409).json({
@@ -152,19 +178,21 @@ app.post('/api/auth/register', asyncHandler(async (req: Request, res: Response) 
 
   users.push(user)
 
-  res.status(201).json({
+  return res.status(201).json({
+    message: 'Cuenta creada correctamente.',
     token: tokenFor(user),
     user: publicUser(user)
   })
 }))
 
+// INICIO DE SESIÓN
 app.post('/api/auth/login', asyncHandler(async (req: Request, res: Response) => {
   const data = z.object({
-    email: z.string().email(),
-    password: z.string().min(1)
+    email: z.string().trim().email().transform(value => value.toLowerCase()),
+    password: z.string().min(1).max(72)
   }).parse(req.body)
 
-  const user = users.find(u => u.email === data.email.toLowerCase())
+  const user = users.find(u => u.email === data.email)
 
   if (!user || !await bcrypt.compare(data.password, user.passwordHash)) {
     return res.status(401).json({
@@ -172,26 +200,33 @@ app.post('/api/auth/login', asyncHandler(async (req: Request, res: Response) => 
     })
   }
 
-  res.json({
+  return res.json({
     token: tokenFor(user),
     user: publicUser(user)
   })
 }))
 
+// USUARIO AUTENTICADO
 app.get('/api/auth/me', auth, (req: any, res: Response) => {
-  const u = users.find(x => x.id === req.claims.sub)
+  const user = users.find(u => u.id === req.claims.sub)
 
-  if (!u) {
-    return res.status(404).json({ message: 'Usuario no encontrado.' })
+  if (!user) {
+    return res.status(404).json({
+      message: 'Usuario no encontrado.'
+    })
   }
 
-  res.json({ user: publicUser(u) })
+  return res.json({
+    user: publicUser(user)
+  })
 })
 
+// DIRECTORIO DE PROFESIONALES
 app.get('/api/professionals', (_req: Request, res: Response) => {
   res.json({ professionals })
 })
 
+// CREAR SOLICITUD
 app.post('/api/requests', auth, asyncHandler(async (req: any, res: Response) => {
   const data = z.object({
     area: z.enum(['Jurídica', 'Psicológica']),
@@ -199,11 +234,11 @@ app.post('/api/requests', auth, asyncHandler(async (req: any, res: Response) => 
     professionalId: z.string().optional()
   }).parse(req.body)
 
-  const p = data.professionalId
-    ? professionals.find(x => x.id === data.professionalId)
+  const professional = data.professionalId
+    ? professionals.find(p => p.id === data.professionalId)
     : undefined
 
-  if (data.professionalId && !p) {
+  if (data.professionalId && !professional) {
     return res.status(404).json({
       message: 'Profesional no encontrado.'
     })
@@ -216,12 +251,12 @@ app.post('/api/requests', auth, asyncHandler(async (req: any, res: Response) => 
     subject: data.subject,
     status: 'pending',
     createdAt: new Date().toISOString(),
-    professional: p?.name
+    professional: professional?.name
   }
 
   requests.unshift(item)
 
-  res.status(201).json({
+  return res.status(201).json({
     request: {
       id: item.id,
       area: item.area,
@@ -233,27 +268,37 @@ app.post('/api/requests', auth, asyncHandler(async (req: any, res: Response) => 
   })
 }))
 
+// CONSULTAR SOLICITUDES
 app.get('/api/requests', auth, (req: any, res: Response) => {
-  res.json({
+  return res.json({
     requests: requests
       .filter(r => r.userId === req.claims.sub)
       .map(({ userId, ...r }) => r)
   })
 })
 
-app.use((err: any, _req: Request, res: Response, _next: express.NextFunction) => {
+// MANEJO DE ERRORES
+app.use((
+  err: any,
+  _req: Request,
+  res: Response,
+  _next: express.NextFunction
+) => {
   if (err instanceof z.ZodError) {
     return res.status(400).json({
       message: 'Revisa los datos ingresados.',
-      errors: err.issues.map(i => ({
-        field: i.path.join('.'),
-        message: i.message
+      errors: err.issues.map(issue => ({
+        field: issue.path.join('.'),
+        message: issue.message
       }))
     })
   }
 
-  console.error(err)
-  res.status(500).json({ message: 'Ocurrió un error interno.' })
+  console.error('Error en JustiMente:', err)
+
+  return res.status(500).json({
+    message: 'Ocurrió un error interno.'
+  })
 })
 
 app.listen(PORT, () => {
